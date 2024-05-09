@@ -28,30 +28,17 @@ class Agent:
         self.household_connections = []
         self.workplace_connections = []
         self.friend_connections = []
+        self.days_since_last_llm_decision = 100
         
         # SEAIR State:
         self.seir_state = 'S'
-
-        # Keep track of days in each state, for transition
-        self.exposed_days = 0
-        self.asymptomatic_days = 0
-        self.infected_days = 0
 
         # Keep track of all the states and decisions made by the agent at each step
         self.telemetry = []
         self.prompt = ''
 
-    def decide(self, perc_pop_infected):
+    def decide(self, n_symptomatic_agents, total_agents):
 
-        # Recovered agents do not take any actions, as they do not influence the spread of the virus anymore
-        if self.seir_state == 'R':
-            self.go_to_work = True
-            self.social_activity = True
-            self.wear_mask = False
-            self.take_private_transport = False
-            self.reasoning = 'Agent is Recovered and does not take any actions'
-            return
-            
         # get list of friends which are symptomatic
         friends_symptomatic = [friend.name for friend in self.friend_connections if friend.seir_state in ['I']]
         n_friends_all = len(self.friend_connections)
@@ -71,7 +58,6 @@ class Agent:
         self.n_coworkers_all = n_coworkers_all
         self.n_coworkers_symptomatic = len(coworkers_symptomatic)
 
-
         household_symptomatic = [household.name for household in self.household_connections if household.seir_state in ['I']]
         n_household_all = len(self.household_connections)
         if len(household_symptomatic) == 0:
@@ -81,124 +67,156 @@ class Agent:
         self.n_household_all = n_household_all
         self.n_household_symptomatic = len(household_symptomatic)
 
+        # if the agent is showing symptoms, put it in the prompt, so he can make a decision based on that.
+        if self.seir_state in ['I']:
+            showing_symptoms = f'{self.name} is currently showing symptoms of virus X, and could spread it to others.'
+        else:
+            showing_symptoms = ''
+
+        # Recovered agents do not take any actions, as they do not influence the spread of the virus anymore
+        if self.seir_state == 'R':
+            self.go_to_work = True
+            self.social_activity = True
+            self.wear_mask = False
+            self.take_private_transport = False
+            self.reasoning = 'Agent is Recovered and does not take any actions'
+            return
+        
         if self.behaviour_model == 'ABM-generative':
-            # Generate the agent's decision
-            
-            behaviour_dict = {
-                'scared' : f'{self.name} is very scared of the virus, and will only get out of home if there is zero or minimal risk of getting infected. ',
-                'cautious': f'{self.name} will assess the situation, and will make his decisions depending on the risk. For example, if the risk is low or not significant, he will go out without a mask (for example if the percentage of infected people is relatively low).',
-                'careless': f'{self.name} is not afraid of the virus spreading in the city. {self.name} doesn’t care about spreading the virus to his contacts, and disregards the well-being of others.'
-            }
-            behaviour_prompt = behaviour_dict[self.behaviour]
 
-            # if the agent is showing symptoms, put it in the prompt
-            if self.seir_state in ['I']:
-                showing_symptoms = f'{self.name} is currently showing symptoms of virus X, and could spread it to others.'
+            if self.days_since_last_llm_decision < REFRESH_LLM_DECISION_EVERY_N_DAYS:
+                print(f'Agent {self.name} has already made a decision {self.days_since_last_llm_decision} days ago. Skipping decision making.')
+                self.days_since_last_llm_decision += 1
+                return
+            
             else:
-                showing_symptoms = ''
+                # Refresh the LLM decision
+                self.days_since_last_llm_decision = 0
 
-            prompt = f'''
-                        CONTEXT:
-                        {self.name} is {self.age} years old. {self.name} lives in Tamamushi City.
-                        {showing_symptoms}
-                        {self.name} is currently aware that virus X spreading across the country. From the newspaper, {self.name} learns that {int(perc_pop_infected*100)}% of the population in Tamamushi City has been infected with X.
-                        {friends_str}
-                        {coworkers_str}
-                        {household_str}
-                        {behaviour_prompt}
+                ### 1st Step: Situation Assessment ###
 
-                        Given {self.name}'s belief about the virus X and context, he needs to make the following decisions:
-                        - Go to work OR stay at home. His work cannot be done remotely.
-                        - If {self.name} goes to work, does he take the public transport (cheap but could expose you to infected people) or taxi (expensive, but safer)?
-                        - After work, {self.name} can decide if he wants to participate in a social activity with his friends.
-                        - Does {self.name} wear a mask today or not?
+                # Agent's behaviour
+                behaviour_prompt = behaviour_dict[self.behaviour] # retrieved from parameters.py
+                behaviour_prompt = behaviour_prompt.replace('AGENT_NAME', self.name)
 
-                        Write an output json that briefly summarises the reasoning and states the decisions {self.name} made. 
+                prompt_situation_assessment = prompt_situation_assessment_template
+                for var, value in {
+                    'AGENT_NAME': self.name,
+                    'AGENT_AGE': self.age,
+                    'NUMBER_SYMPTOMATIC_AGENTS': n_symptomatic_agents,
+                    'TOT_POPULATION': total_agents,
+                    'AGENT_SHOWING_SYMPTOMS': showing_symptoms,
+                    'AGENT_BEHAVIOUR': behaviour_prompt
+                }.items():
+                    prompt_situation_assessment = prompt_situation_assessment.replace(var, str(value))
+                
+                self.prompt_situation_assessment = prompt_situation_assessment # store for telemetry
 
-                        Example of a generic output json:
-                        {example_json} 
-                    '''
-            
-            self.prompt = prompt # store for telemetry
-            
-            # read cache from cache.json and close the file
-            with open('cache.json', 'r') as f:
-                cache = json.load(f)
+                print(f'##### \nPrompt Situation Assessment: \n {prompt_situation_assessment}')
 
-            if prompt in cache:
-                # If it is, return the corresponding response
-                response_str = cache[prompt]
-                print('Response from cache!')
-            else:
-                # Get the response from the API
                 response = client.chat.completions.create(
-                        model="gpt-3.5-turbo-1106",
-                        response_format={ "type": "json_object" },
-                        #seed = 0,  # <<<--- uncomment this line to get deterministic results (Reproducibility)
-                        messages=[
-                            {"role": "system", "content": f"Impersonate {self.name}. Output his decisions in JSON format."},
-                            {"role": "user", "content": prompt},
-                        ]
-                        )
+                model="gpt-3.5-turbo-0125",
+                messages=[
+                {"role": "system", "content": f"imagine what {self.name} is thinking step-by-step as he would do in this situation based on the context"},
+                {"role": "user", "content": prompt_situation_assessment},
+                ]
+                )
+                reasoning = response.choices[0].message.content
+
+                print(f'##### \nReasoning LLM OUTPUT: \n{reasoning}')
+
+                self.reasoning = reasoning # store for telemetry
+
+                ### 2nd Step: Decision Making ###
+                prompt_decision_making = prompt_decision_making_template
+                for var, value in {
+                    'AGENT_NAME': self.name,
+                    'AGENT_BEHAVIOUR': behaviour_prompt,
+                    'REASONING_OUTPUT': reasoning
+                }.items():
+                    prompt_decision_making = prompt_decision_making.replace(var, str(value))
+                
+                self.prompt_decision_making = prompt_decision_making # store for telemetry
+                
+                print(f'##### \nPrompt Decision Making: \n{prompt_decision_making}')
+
+                response = client.chat.completions.create(
+                model="gpt-3.5-turbo-0125",
+                messages=[
+                {"role": "system", "content": f"Impersonate {self.name}, reason through the situation and make decisions based on the context"},
+                {"role": "user", "content": prompt_decision_making},
+                ]
+                )
+                decisions = response.choices[0].message.content
+
+                print(f'##### \nDecisions LLM OUTPUT: \n{decisions}')
+
+                self.reasoning +=   f'\n\nDecisions: {decisions}' # store for telemetry
+
+
+                ### 3rd Step: Extract Decisions ###
+                prompt_decision_extraction = prompt_decision_extraction_template
+                for var, value in {
+                    'DECISION_MAKING_OUTPUT': decisions
+                }.items():
+                    prompt_decision_extraction = prompt_decision_extraction.replace(var, str(value))
+
+                self.prompt_decision_extraction = prompt_decision_extraction # store for telemetry
+
+                print(f'##### \nPrompt Decision Extraction: \n{prompt_decision_extraction}')
+
+                response = client.chat.completions.create(
+                model="gpt-3.5-turbo-0125",
+                response_format={ "type": "json_object" },
+                messages=[
+                {"role": "system", "content": f"Execute the task following the examples given. You must output JSON with boolean values for each of the decisions"},
+                {"role": "user", "content": prompt_decision_extraction},
+                ]
+                )
                 response_str = response.choices[0].message.content
 
-                # re-open the file to read the previous cache and update it
-                with open('cache.json', 'r') as f:
-                    cache = json.load(f)
+                print(f'##### \nDecisions Extraction LLM OUTPUT: \n{response_str}')
 
-                # update the cache with the new response
-                cache[prompt] = response_str
+                # extract the decisions from the response
+                try:
+                    decisions = response_str
+                    decisions = decisions.replace('true', 'True')
+                    decisions = decisions.replace('false', 'False')
 
-                # write the updated cache to the file
-                with open('cache.json', 'w') as f:
-                    json.dump(cache, f)
+                    # in most of the cases where the model output none or null, he means False (self-isolate):
+                    decisions = decisions.replace('none', 'False') 
+                    decisions = decisions.replace('null', 'False')
+                    decisions = decisions.replace('None', 'False') 
+                    decisions = decisions.replace('Null', 'False')
+                    
+                    decisions = eval(decisions)
 
-            # extract the decisions from the response
-            try:
-                decisions = response_str
-                decisions = decisions.replace('true', 'True')
-                decisions = decisions.replace('false', 'False')
+                    try:
+                        self.go_to_work = decisions['go_to_work']
+                    except: # default decision: go to work
+                        self.go_to_work = True
 
-                # in most of the cases where the model output none or null, he means False (self-isolate):
-                decisions = decisions.replace('none', 'False') 
-                decisions = decisions.replace('null', 'False')
-                decisions = decisions.replace('None', 'False') 
-                decisions = decisions.replace('Null', 'False')
+                    try:
+                        self.social_activity = decisions['social_activity']
+                    except: # default decision: participate in social activity
+                        self.social_activity = True
+
+                    try:
+                        self.wear_mask = decisions['wear_mask']
+                    except: # default decision: don't wear mask
+                        self.wear_mask = False
+
+                    try:
+                        self.take_private_transport = decisions['transport_public']
+                    except: # default decision: take public transport
+                        self.take_private_transport = False
                 
-                decisions = eval(decisions)
-
-                try:
-                    self.go_to_work = decisions['go_to_work']
-                except: # default decision: go to work
+                except Exception as e:
+                    # Error in parsing the response. Using default decisions
                     self.go_to_work = True
-
-                try:
-                    self.social_activity = decisions['social_activity']
-                except: # default decision: participate in social activity
                     self.social_activity = True
-
-                try:
-                    self.wear_mask = decisions['wear_mask']
-                except: # default decision: don't wear mask
                     self.wear_mask = False
-
-                try:
-                    self.take_private_transport = decisions['transport_public']
-                except: # default decision: take public transport
                     self.take_private_transport = False
-
-                try:
-                    self.reasoning = decisions['reasoning']
-                except: # default reasoning
-                    self.reasoning = 'NO REASONING PROVIDED'
-            
-            except Exception as e:
-                # Error in parsing the response. Using default decisions
-                self.go_to_work = True
-                self.social_activity = True
-                self.wear_mask = False
-                self.take_private_transport = False
-                self.reasoning = 'ERROR: LLM RESPONSE PARSING FAILED'
 
         elif self.behaviour_model == 'ABM-isolation':
             if self.seir_state == 'I':
@@ -315,7 +333,7 @@ class Network:
     
     def output_telemetry(self):
         # create a folder named with main settings and current datetime string
-        self.output_folder_name = f'output/{self.behaviour_model}_{self.n_agents}_{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}'
+        self.output_folder_name = f'output/{self.behaviour_model}_{self.n_agents}_{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")}'
         os.makedirs(self.output_folder_name)
 
         # save a csv with the network-level telemetry as plotted in plot_trends. create a pd dataframe and save it as csv
@@ -337,7 +355,7 @@ class Network:
                 for telemetry in agent.telemetry:
                     f.write(f"{telemetry}\n")
 
-        self.plot_trends()
+        #self.plot_trends()
         
     def plot_trends(self):
         # Plot the trends of the infection
@@ -378,8 +396,15 @@ class Network:
         plt.xlabel('Day')
         plt.ylabel('Average number of contacts per agent')
         plt.title('Average number of contacts per agent')
+        max_encounters = max(self.avg_contacts_historical) + 0.1
+        plt.ylim(0, max_encounters)
         plt.savefig(f'{self.output_folder_name}/avg_contacts_trend.png')
         plt.show()
+
+        print(f'Average daily contacts per agent: {np.mean(self.avg_contacts_historical)}')
+        print(f'Transmission probability: {PROBABILITY_INFECTION}')
+        print(f'Duration of infection: {1/INFECTED_TO_RECOVERED_TRANSITION_PROB} days')
+        print(f' => R0 reproduction number = average number of contacts per agent * transmission probability * duration of infection = {np.mean(self.avg_contacts_historical) * PROBABILITY_INFECTION * (1/INFECTED_TO_RECOVERED_TRANSITION_PROB)}')
     
     def social_contact(self, agent1, agent2, contact_type):
         n_wearing_masks = sum(agent.wear_mask for agent in [agent1, agent2]) # can be 0, 1 or 2
@@ -388,16 +413,23 @@ class Network:
         for susceptible, infectious in [(agent1, agent2), (agent2, agent1)]:
 
             # Check if either agent is susceptible and the other is infectious
-            if susceptible.seir_state == 'S' and infectious.seir_state in ['I', 'A']:
+            if susceptible.seir_state == 'S' and infectious.seir_state in ['I']:
 
                 if random.random() < p:
                     susceptible.seir_state = 'E'
-                    print(f'Agent #{infectious} infected agent #{susceptible} ({contact_type})')
+                    #print(f'Agent #{infectious} infected agent #{susceptible} ({contact_type})')
+                    break  # Exit loop once infection occurs
+            
+            if susceptible.seir_state == 'S' and infectious.seir_state in ['A']:
+                infectiosness_factor_asymptomatic = 0.5 # in comparison to symptomatic carriers
+                if random.random() < p * infectiosness_factor_asymptomatic:
+                    susceptible.seir_state = 'E'
+                    #print(f'Agent #{infectious} infected agent #{susceptible} ({contact_type})')
                     break  # Exit loop once infection occurs
     
     def run_simulation(self, n_steps):
         for i in range(n_steps):
-            print(f'Step {i} of {n_steps} ({self.current_day_of_week})')
+            #print(f'Step {i} of {n_steps} ({self.current_day_of_week})')
 
             # if there are no infected/asymtpomatic agents, we stop the simulation
             if len([agent for agent in self.agents if agent.seir_state in ['I', 'A']]) == 0:
@@ -415,39 +447,37 @@ class Network:
 
             # Update the SEIR state of the agents
             for agent in self.agents:
-                if agent.seir_state in STATE_DICT:
-                    attr, length, next_state = STATE_DICT[agent.seir_state]
-                    setattr(agent, attr, getattr(agent, attr) + 1)
-                    if getattr(agent, attr) > length:
-                        agent.seir_state = next_state
+                if agent.seir_state == 'E':
+                    transition_prob = EXPOSED_TO_INFECTED_TRANSITION_PROB
+                    if random.random() < transition_prob:
+                        probability_asymptomatic = SYMPTOMATIC_PROB
+                        agent.seir_state = 'A' if random.random() < probability_asymptomatic else 'I'
+                elif agent.seir_state == 'A' or agent.seir_state == 'I':
+                    transition_prob = INFECTED_TO_RECOVERED_TRANSITION_PROB
+                    if random.random() < transition_prob:
+                        agent.seir_state = 'R'
 
             # Update the percentage of infected agents (will be used by the agents to decide their actions)
             self.perc_pop_infected = len([agent for agent in self.agents if agent.seir_state in ['I']]) / len(self.agents)
 
-            # Remove previous day's decisions for all agents and default to no decision (needed in case API fails)
-            for agent in self.agents:
-                agent.go_to_work = True
-                agent.social_activity = True
-                agent.wear_mask = False
-                agent.take_private_transport = False
-                agent.reasoning = 'NO DECISION YET'
-                agent.prompt = 'NO PROMPT YET'
+            # # Remove previous day's decisions for all agents and default to no decision (needed in case API fails)
+            # for agent in self.agents:
+            #     agent.go_to_work = True
+            #     agent.social_activity = True
+            #     agent.wear_mask = False
+            #     agent.take_private_transport = False
+            #     agent.reasoning = 'NO DECISION YET'
+            #     agent.prompt = 'NO PROMPT YET'
 
-            # # Parallelized agent decision-making
-            # with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENT_API_CALLS) as executor:
-            #     # Submit agent decisions in parallel
-            #     decision_futures = [executor.submit(agent.decide, self.perc_pop_infected) for agent in self.agents]
-                
-            #     # Wait for all decisions to complete
-            #     concurrent.futures.wait(decision_futures)
+            n_symptomatic_agents = len([agent for agent in self.agents if agent.seir_state in ['I']])
 
             for agent in self.agents:
-                agent.decide(self.perc_pop_infected)
+                agent.decide(n_symptomatic_agents, len(self.agents))
             
-            # Compute the percentage of agents that failed to make a decision (reasoning = 'NO DECISION YET')
-            perc_failed_decision = len([agent for agent in self.agents if agent.reasoning == 'NO DECISION YET']) / len(self.agents)
-            if perc_failed_decision > 0.2:
-                raise Exception(f'Rate Limit Exceeded: {round(perc_failed_decision*100, 2)}% of API calls failed. Stopping simulation.')
+            # # Compute the percentage of agents that failed to make a decision (reasoning = 'NO DECISION YET')
+            # perc_failed_decision = len([agent for agent in self.agents if agent.reasoning == 'NO DECISION YET']) / len(self.agents)
+            # if perc_failed_decision > 0.2:
+            #     raise Exception(f'Rate Limit Exceeded: {round(perc_failed_decision*100, 2)}% of API calls failed. Stopping simulation.')
 
             # Add telemetry to the agents
             for agent in self.agents:
@@ -459,7 +489,7 @@ class Network:
                     'age': agent.age,
                     'id': agent.id,
                     'day': self.simulation_days,
-                    'perc_pop_infected': self.perc_pop_infected,
+                    'n_symptomatic_agents': n_symptomatic_agents,
                     'go_to_work': agent.go_to_work,
                     'take_private_transport': agent.take_private_transport,
                     'social_activity': agent.social_activity,
@@ -470,7 +500,9 @@ class Network:
                     'n_coworkers_symptomatic': agent.n_coworkers_symptomatic,
                     'n_household_all': agent.n_household_all,
                     'n_household_symptomatic': agent.n_household_symptomatic,
-                    'prompt': agent.prompt
+                    'prompt_situation_assessment': agent.prompt_situation_assessment,
+                    'prompt_decision_making': agent.prompt_decision_making,
+                    'prompt_decision_extraction': agent.prompt_decision_extraction
                 }
                 print(new_telemetry)
                 agent.telemetry.append(new_telemetry)
