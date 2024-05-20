@@ -1,26 +1,27 @@
-example_json = '''
-            {
-                "reasoning: : "Since the risk of infection is low, I will go to work by public transport without wearing a mask. I will also participate in a social activity with my friends."
-                "go_to_work": true,
-                "transport_public": true,
-                "wear_mask": false,
-                "social_activity": true
-            }
-            '''
+# example_json = '''
+#             {
+#                 "reasoning: : "Since the risk of infection is low, I will go to work by public transport without wearing a mask. I will also participate in a social activity with my friends."
+#                 "go_to_work": true,
+#                 "transport_public": true,
+#                 "wear_mask": false,
+#                 "social_activity": true
+#             }
+#             '''
 
 # Proportions of agents with different behaviours (to be tuned)
-CARELESS_PROPORTION = 0.1
-SCARED_PROPORTION = 0.2
-CAUTIOUS_PROPORTION = 0.7
+CARELESS_PROPORTION = 0.25
+SCARED_PROPORTION = 0.1
+CAUTIOUS_PROPORTION = 0.65
 
 # Probability of infection when in contact with an infected agent
-PROBABILITY_INFECTION = 0.14
+PROBABILITY_INFECTION = 0.30
 
 # Mask efficiency # reduce the probability of infection by EFFICIENCY_MASK for each mask
 # ex: if 2 agents are wearing masks, the probability of infection is reduced by EFFICIENCY_MASK^2
 EFFICIENCY_MASK = 0.47
 
 # Network building parameters (the M parameter is the number of edges to attach from a new node to existing nodes)
+# these paarameters match the questionnaire data
 BARBARASI_M_WORKPLACE = 1 
 BARBARASI_M_FRIENDSHIP = 1 
 
@@ -39,7 +40,7 @@ behaviour_dict = {
 prompt_situation_assessment_template = """
 CONTEXT: 
 AGENT_NAME is AGENT_AGE years old. AGENT_NAME lives in Tamamushi City.
-AGENT_NAME is currently aware that virus X spreading across the country. From the newspaper, AGENT_NAME learns that there are currently NUMBER_SYMPTOMATIC_AGENTS confirmed infections cases (out of TOT_POPULATION population in Tamamushi).
+AGENT_NAME is currently aware that virus X spreading across the country. An active case can be infectious without feeling any symptoms (asymptomatic) and unknowingly spread the disease. From the newspaper, AGENT_NAME learns that there are currently NUMBER_SYMPTOMATIC_AGENTS confirmed infections cases (out of TOT_POPULATION population in Tamamushi).
 AGENT_SHOWING_SYMPTOMS
 
 AGENT_NAME's perception of the virus: 
@@ -95,3 +96,5 @@ Reasoning: "DECISION_MAKING_OUTPUT"
 
 
 REFRESH_LLM_DECISION_EVERY_N_DAYS = 7
+
+GPT_MODEL = "gpt-3.5-turbo-0125"

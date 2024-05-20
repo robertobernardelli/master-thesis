@@ -165,3 +165,6 @@ key.txt
 cache.json
 
 output/
+
+questionari.ipynb
+questionari_postprocessed.xlsx

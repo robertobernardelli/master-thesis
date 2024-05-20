@@ -35,7 +35,12 @@ class Agent:
 
         # Keep track of all the states and decisions made by the agent at each step
         self.telemetry = []
+
+        # Empty strings for non-generative simulations; these are overwritten by the LLM during generative simulations
         self.prompt = ''
+        self.prompt_situation_assessment = ''
+        self.prompt_decision_making = ''
+        self.prompt_decision_extraction = ''
 
     def decide(self, n_symptomatic_agents, total_agents):
 
@@ -166,7 +171,7 @@ class Agent:
                 print(f'##### \nPrompt Decision Extraction: \n{prompt_decision_extraction}')
 
                 response = client.chat.completions.create(
-                model="gpt-3.5-turbo-0125",
+                model=GPT_MODEL,
                 response_format={ "type": "json_object" },
                 messages=[
                 {"role": "system", "content": f"Execute the task following the examples given. You must output JSON with boolean values for each of the decisions"},
@@ -219,18 +224,21 @@ class Agent:
                     self.take_private_transport = False
 
         elif self.behaviour_model == 'ABM-isolation':
+
+            # In the ABM-isolation model, the agent will decide to self-isolate if he is infected
             if self.seir_state == 'I':
                 self.go_to_work = False
                 self.social_activity = False
                 self.wear_mask = True
                 self.take_private_transport = True
                 self.reasoning = 'ABM-isolation: Agent is infected, staying at home and isolating'
+            # If he's not infected, he will use probabilities to make decisions 
             else: 
-                self.go_to_work = True
-                self.social_activity = True
-                self.wear_mask = False
-                self.take_private_transport = False
-                self.reasoning = 'ABM-isolation: Agent is not infected, going to work and socializing'
+                self.go_to_work = random.random() < 0.9
+                self.social_activity = random.random() < 0.5
+                self.wear_mask = random.random() < 0.5
+                self.take_private_transport = random.random() < 0.5
+                self.reasoning = 'ABM-isolation: Agent is not infected, will use probabilities to decide'
         
         elif self.behaviour_model == 'ABM-normal':
             self.go_to_work = True
@@ -260,8 +268,24 @@ def generate_household_network(n_agents):
     agents = list(range(n_agents))
     random.shuffle(agents)
 
+    # distribution of household sizes from questionnaires (question cohabitant_num)
+    # 0     0.244945
+    # 1     0.234575
+    # 2     0.226354
+    # 3     0.187171
+    # 4     0.073106
+    # 5     0.022739
+    # 6     0.006666
+    # 7     0.002889
+    # 8     0.000444
+    # 9     0.000296
+    # 10    0.000815
+
     while agents:
-        household_size = min(random.randint(1, 5), len(agents))
+        household_size = np.random.choice([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 
+        p=[0.244945, 0.234575, 0.226354, 0.187171, 0.073106, 0.022739, 0.006666, 0.002889, 0.000444, 0.000296, 0.000815])
+        household_size += 1 # to count for the agent itself
+        household_size = min(household_size, len(agents))
         household_agents = [agents.pop() for _ in range(household_size)]
         for agent in household_agents:
             for other_agent in household_agents:
@@ -513,7 +537,31 @@ class Network:
                 #if agent.seir_state in ['I', 'A']:
                 if self.current_day_of_week in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']:
                     if agent.go_to_work:
-                        n_encounters_work = 2
+
+                        # Distribution of workplace contacts from questionnaires:
+                        # 1     0.146033
+                        # 2     0.119120
+                        # 3     0.099462
+                        # 4     0.108823
+                        # 5     0.088930
+                        # 6     0.064124
+                        # 7     0.051486
+                        # 8     0.059209
+                        # 9     0.033700
+                        # 10    0.067400
+                        # 11    0.018722
+                        # 12    0.026679
+                        # 13    0.014042
+                        # 14    0.009829
+                        # 15    0.032530
+                        # 16    0.010999
+                        # 17    0.005851
+                        # 18    0.007723
+                        # 19    0.004681
+                        # 20    0.030658
+
+                        n_encounters_work = np.random.choice([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+                        p=[0.146033, 0.119120, 0.099462, 0.108823, 0.088930, 0.064124, 0.051486, 0.059209, 0.033700, 0.067400, 0.018722, 0.026679, 0.014042, 0.009829, 0.032530, 0.010999, 0.005851, 0.007723, 0.004681, 0.030658])
                         try:
                             random_encounters = random.sample(agent.workplace_connections, n_encounters_work)
                         except ValueError:
@@ -544,7 +592,22 @@ class Network:
                             contacts.append((agent, friend, 'social'))
                     
                     # Household contacts
-                    n_encounters_household = 2
+
+                    # household contacts distribution from questionnaires:
+                    # 0     0.304451
+                    # 1     0.257506
+                    # 2     0.184804
+                    # 3     0.136336
+                    # 4     0.062033
+                    # 5     0.022100
+                    # 6     0.012193
+                    # 7     0.006478
+                    # 8     0.007697
+                    # 9     0.002591
+                    # 10    0.003810
+
+                    n_encounters_household = np.random.choice([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+                    p=[0.304451, 0.257506, 0.184804, 0.136336, 0.062033, 0.022100, 0.012193, 0.006478, 0.007697, 0.002591, 0.003811])
                     try:
                         random_encounters = random.sample(agent.household_connections, n_encounters_household)
                     except ValueError:
