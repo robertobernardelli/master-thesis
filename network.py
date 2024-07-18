@@ -111,7 +111,10 @@ class Agent:
                     'NUMBER_SYMPTOMATIC_AGENTS': n_symptomatic_agents,
                     'TOT_POPULATION': total_agents,
                     'AGENT_SHOWING_SYMPTOMS': showing_symptoms,
-                    'AGENT_BEHAVIOUR': behaviour_prompt
+                    'AGENT_BEHAVIOUR': behaviour_prompt,
+                    'FRIENDS_SYMPTOMATIC': friends_str,
+                    'COWORKERS_SYMPTOMATIC': coworkers_str,
+                    'HOUSEHOLD_SYMPTOMATIC': household_str
                 }.items():
                     prompt_situation_assessment = prompt_situation_assessment.replace(var, str(value))
                 
@@ -225,21 +228,34 @@ class Agent:
 
         elif self.behaviour_model == 'ABM-isolation':
 
-            # In the ABM-isolation model, the agent will decide to self-isolate if he is infected
-            if self.seir_state == 'I':
+            if self.behaviour == 'scared':
                 self.go_to_work = False
                 self.social_activity = False
                 self.wear_mask = True
                 self.take_private_transport = True
-                self.reasoning = 'ABM-isolation: Agent is infected, staying at home and isolating'
-            # If he's not infected, he will use probabilities to make decisions 
-            else: 
+                self.reasoning = 'ABM-isolation: Agent is scared, staying at home and isolating'
+
+            elif self.behaviour == 'careless':
                 self.go_to_work = random.random() < 0.9
-                self.social_activity = random.random() < 0.5
-                self.wear_mask = random.random() < 0.5
-                self.take_private_transport = random.random() < 0.5
-                self.reasoning = 'ABM-isolation: Agent is not infected, will use probabilities to decide'
-        
+                self.social_activity = random.random() < 0.9
+                self.wear_mask = random.random() < 0.1
+                self.take_private_transport = random.random() < 0.1
+                self.reasoning = 'ABM-isolation: Agent is careless, going to work and socializing'
+
+            elif self.behaviour == 'cautious':
+                if self.seir_state == 'I':
+                    self.go_to_work = False
+                    self.social_activity = False
+                    self.wear_mask = True
+                    self.take_private_transport = True
+                    self.reasoning = 'ABM-isolation: Agent is infected, staying at home and isolating'
+                else: 
+                    self.go_to_work = random.random() < 0.9
+                    self.social_activity = random.random() < 0.5
+                    self.wear_mask = random.random() < 0.5
+                    self.take_private_transport = random.random() < 0.5
+                    self.reasoning = 'ABM-isolation: Agent is not infected, will use probabilities to decide'
+            
         elif self.behaviour_model == 'ABM-normal':
             self.go_to_work = True
             self.social_activity = True
@@ -383,17 +399,33 @@ class Network:
         
     def plot_trends(self):
         # Plot the trends of the infection
-        sns.lineplot(x=self.days_infection_historical, y=self.infected_historical, label='Infected')
-        sns.lineplot(x=self.days_infection_historical, y=self.susceptible_historical, label='Susceptible')
-        sns.lineplot(x=self.days_infection_historical, y=self.exposed_historical, label='Exposed')
-        sns.lineplot(x=self.days_infection_historical, y=self.recovered_historical, label='Recovered')
-        sns.lineplot(x=self.days_infection_historical, y=self.asymptomatic_historical, label='Asymptomatic')
+        sns.lineplot(x=self.days_infection_historical, y=self.susceptible_historical, label='Susceptible', palette='tab10')
+        sns.lineplot(x=self.days_infection_historical, y=self.exposed_historical, label='Exposed', palette='tab10')
+        sns.lineplot(x=self.days_infection_historical, y=self.asymptomatic_historical, label='Asymptomatic', palette='tab10')
+        sns.lineplot(x=self.days_infection_historical, y=self.infected_historical, label='Infected', palette='tab10')
+        sns.lineplot(x=self.days_infection_historical, y=self.recovered_historical, label='Recovered', palette='tab10')
+
+
         plt.xlabel('Day')
         plt.ylabel('Number of agents')
         plt.title('Infection trends')
         plt.savefig(f'{self.output_folder_name}/infection_trends.png')
         plt.show()
+
+        # Sum the exposed, asymptomatic, and infected to get a single E+A+I line
+        combined_exposed_asymptomatic_infected = [e + a + i for e, a, i in zip(self.exposed_historical, self.asymptomatic_historical, self.infected_historical)]
         
+        # Plot the trends of the infection
+        sns.lineplot(x=self.days_infection_historical, y=self.susceptible_historical, label='Susceptible', palette='tab10')
+        sns.lineplot(x=self.days_infection_historical, y=combined_exposed_asymptomatic_infected, label='Exposed + Asymptomatic + Infected', palette='tab10')
+        sns.lineplot(x=self.days_infection_historical, y=self.recovered_historical, label='Recovered',  palette='tab10')
+
+        plt.xlabel('Day')
+        plt.ylabel('Number of agents')
+        plt.title('Infection trends')
+        plt.savefig(f'{self.output_folder_name}/infection_trends_eai_combined.png')
+        plt.show()
+            
 
         # compute daily new cases, by computing difference between susceptible agents and the sum of the other states
         daily_new_cases = [0]
@@ -428,7 +460,8 @@ class Network:
         print(f'Average daily contacts per agent: {np.mean(self.avg_contacts_historical)}')
         print(f'Transmission probability: {PROBABILITY_INFECTION}')
         print(f'Duration of infection: {1/INFECTED_TO_RECOVERED_TRANSITION_PROB} days')
-        print(f' => R0 reproduction number = average number of contacts per agent * transmission probability * duration of infection = {np.mean(self.avg_contacts_historical) * PROBABILITY_INFECTION * (1/INFECTED_TO_RECOVERED_TRANSITION_PROB)}')
+        print(f' => R0 reproduction number = average number of contacts per agent * transmission probability * duration of infection )')
+        print(f'R0  = {np.mean(self.avg_contacts_historical) * PROBABILITY_INFECTION * (1/INFECTED_TO_RECOVERED_TRANSITION_PROB)}')
     
     def social_contact(self, agent1, agent2, contact_type):
         n_wearing_masks = sum(agent.wear_mask for agent in [agent1, agent2]) # can be 0, 1 or 2
@@ -561,7 +594,7 @@ class Network:
                         # 20    0.030658
 
                         n_encounters_work = np.random.choice([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
-                        p=[0.146033, 0.119120, 0.099462, 0.108823, 0.088930, 0.064124, 0.051486, 0.059209, 0.033700, 0.067400, 0.018722, 0.026679, 0.014042, 0.009829, 0.032530, 0.010999, 0.005851, 0.007723, 0.004681, 0.030658])
+                        p=[0.15, 0.13, 0.099-0.0020000000000002, 0.108, 0.088, 0.064, 0.051, 0.059, 0.033, 0.067, 0.018, 0.026, 0.014, 0.009, 0.03, 0.010, 0.005, 0.007, 0.004, 0.030])
                         try:
                             random_encounters = random.sample(agent.workplace_connections, n_encounters_work)
                         except ValueError:

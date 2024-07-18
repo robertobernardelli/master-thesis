@@ -42,6 +42,9 @@ CONTEXT:
 AGENT_NAME is AGENT_AGE years old. AGENT_NAME lives in Tamamushi City.
 AGENT_NAME is currently aware that virus X spreading across the country. An active case can be infectious without feeling any symptoms (asymptomatic) and unknowingly spread the disease. From the newspaper, AGENT_NAME learns that there are currently NUMBER_SYMPTOMATIC_AGENTS confirmed infections cases (out of TOT_POPULATION population in Tamamushi).
 AGENT_SHOWING_SYMPTOMS
+FRIENDS_SYMPTOMATIC
+COWORKERS_SYMPTOMATIC
+HOUSEHOLD_SYMPTOMATIC
 
 AGENT_NAME's perception of the virus: 
 AGENT_BEHAVIOUR
